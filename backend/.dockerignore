@@ -34,7 +34,6 @@ Thumbs.db
 README.md
 
 # Docker files
-Dockerfile
 docker-compose.yml
 
 # Logs
