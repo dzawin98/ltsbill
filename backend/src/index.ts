@@ -30,6 +30,34 @@ const testDbConnection = async () => {
 };
 testDbConnection();
 
+// Health Check Endpoint
+app.get('/api/health', async (req: Request, res: Response) => {
+  try {
+    // Test database connection
+    await db.sequelize.authenticate();
+    
+    res.status(200).json({
+      status: 'healthy',
+      timestamp: getJakartaTime().toISOString(),
+      services: {
+        database: 'connected',
+        server: 'running'
+      },
+      version: '1.0.0'
+    });
+  } catch (error: any) {
+    res.status(503).json({
+      status: 'unhealthy',
+      timestamp: getJakartaTime().toISOString(),
+      services: {
+        database: 'disconnected',
+        server: 'running'
+      },
+      error: error.message
+    });
+  }
+});
+
 // Area CRUD Endpoints
 
 // Get all areas
@@ -38,6 +66,153 @@ app.get('/api/areas', async (req: Request, res: Response) => {
     const areas = await db.Area.findAll({
       order: [['createdAt', 'DESC']]
     });
+
+// Debug endpoint untuk memeriksa customer dengan PPP Secret
+app.get('/api/debug/customers-with-ppp', async (req: Request, res: Response) => {
+  try {
+    const customers = await db.Customer.findAll({
+      where: {
+        pppSecret: {
+          [db.Sequelize.Op.ne]: null
+        },
+        routerName: {
+          [db.Sequelize.Op.ne]: null
+        }
+      },
+      attributes: ['id', 'name', 'pppSecret', 'routerName', 'mikrotikStatus', 'billingStatus', 'serviceStatus']
+    });
+    
+    res.json({
+      success: true,
+      data: customers,
+      count: customers.length
+    });
+  } catch (error: any) {
+    console.error('Error fetching customers with PPP:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to fetch customers with PPP', 
+      error: error.message 
+    });
+  }
+});
+
+// Debug endpoint untuk test auto-enable manual
+app.post('/api/debug/test-auto-enable/:customerId', async (req: Request, res: Response) => {
+  try {
+    const { customerId } = req.params;
+    
+    console.log(`🔧 Manual test auto-enable for customer ${customerId}`);
+    
+    // Ambil data customer dengan relasi router
+    const customer = await db.Customer.findByPk(customerId, {
+      include: [{
+        model: db.Router,
+        as: 'routerData'
+      }]
+    });
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Customer not found'
+      });
+    }
+    
+    console.log(`Customer data:`, {
+      id: customer.id,
+      name: customer.name,
+      pppSecret: customer.pppSecret,
+      routerId: customer.routerId,
+      routerName: customer.routerData ? customer.routerData.name : null,
+      mikrotikStatus: customer.mikrotikStatus
+    });
+    
+    if (!customer.pppSecret) {
+      return res.json({
+        success: false,
+        message: 'Customer does not have PPP Secret',
+        customerData: {
+          id: customer.id,
+          name: customer.name,
+          pppSecret: customer.pppSecret,
+          routerId: customer.routerId,
+          routerName: customer.routerData ? customer.routerData.name : null
+        }
+      });
+    }
+    
+    if (!customer.routerData || !customer.routerData.name) {
+      return res.json({
+        success: false,
+        message: 'Customer does not have valid router',
+        customerData: {
+          id: customer.id,
+          name: customer.name,
+          pppSecret: customer.pppSecret,
+          routerId: customer.routerId,
+          routerName: customer.routerData ? customer.routerData.name : null
+        }
+      });
+    }
+    
+    // Import mikrotik utility
+    const mikrotikAPI = require('../utils/mikrotik');
+    
+    // Enable PPP Secret di MikroTik
+    console.log(`Calling enablePPPSecret with routerName: ${customer.routerData.name}, pppSecret: ${customer.pppSecret}`);
+    const enableResult = await mikrotikAPI.enablePPPSecret(customer.routerData.name, customer.pppSecret);
+    
+    console.log('MikroTik enable result:', enableResult);
+    
+    if (enableResult.success) {
+      // Update customer status
+      await customer.update({
+        billingStatus: 'lunas',
+        mikrotikStatus: 'active',
+        serviceStatus: 'active'
+      });
+      
+      console.log(`✅ PPP Secret ${customer.pppSecret} manually enabled for customer ${customer.name}`);
+      
+      res.json({
+        success: true,
+        message: 'PPP Secret enabled successfully',
+        customerData: {
+          id: customer.id,
+          name: customer.name,
+          pppSecret: customer.pppSecret,
+          routerId: customer.routerId,
+          routerName: customer.routerData.name,
+          mikrotikStatus: 'active'
+        },
+        mikrotikResult: enableResult
+      });
+    } else {
+      console.error(`❌ Failed to enable PPP Secret ${customer.pppSecret} for customer ${customer.name}:`, enableResult.message);
+      
+      res.status(500).json({
+        success: false,
+        message: `Failed to enable PPP Secret: ${enableResult.message}`,
+        customerData: {
+          id: customer.id,
+          name: customer.name,
+          pppSecret: customer.pppSecret,
+          routerId: customer.routerId,
+          routerName: customer.routerData.name
+        },
+        mikrotikResult: enableResult
+      });
+    }
+    
+  } catch (error: any) {
+    console.error('❌ Failed to test auto-enable:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to test auto-enable',
+      error: error.message
+    });
+  }
+});
     res.json({
       success: true,
       data: areas,
@@ -1445,37 +1620,55 @@ app.get('/api/routers/:id/ppp-secrets', async (req: Request, res: Response) => {
     }
     
     try {
-      // Koneksi ke Mikrotik
+      // Koneksi ke Mikrotik dengan timeout
       const conn = new RouterOSAPI({
         host: router.ipAddress,
         user: router.username,
         password: router.password,
-        port: router.port || 8728
+        port: router.port || 8728,
+        timeout: 10000 // 10 second timeout
       });
       
+      console.log(`Connecting to MikroTik at ${router.ipAddress} to fetch PPP secrets...`);
       await conn.connect();
       
       // Ambil PPP secrets
       const secrets = await conn.write('/ppp/secret/print');
       
       await conn.close();
+      console.log(`Retrieved ${secrets.length} PPP secrets from MikroTik`);
       
       // Format response untuk konsistensi
       const formattedSecrets = secrets.map((secret: any) => ({
         name: secret.name,
         profile: secret.profile,
-        service: secret.service
+        service: secret.service || 'pppoe',
+        comment: secret.comment || '',
+        disabled: secret.disabled === 'true'
       }));
       
       res.json(formattedSecrets);
       
-    } catch (mikrotikError) {
-      console.error('Mikrotik connection error:', mikrotikError);
+    } catch (mikrotikError: any) {
+      console.error('MikroTik connection error:', mikrotikError);
+      
+      // Provide more specific error messages and fallback to mock data
+      let errorMessage = 'Failed to fetch PPP secrets from MikroTik';
+      if (mikrotikError.message?.includes('timeout')) {
+        errorMessage = 'Connection timeout - returning mock data';
+      } else if (mikrotikError.message?.includes('login')) {
+        errorMessage = 'Authentication failed - returning mock data';
+      } else if (mikrotikError.message?.includes('UNKNOWNREPLY')) {
+        errorMessage = 'MikroTik API communication error - returning mock data';
+      }
+      
+      console.warn(errorMessage);
+      
       // Fallback ke mock data jika koneksi gagal
       const mockSecrets = [
-        { name: 'user1', profile: 'basic-10mbps', service: 'pppoe' },
-        { name: 'user2', profile: 'standard-25mbps', service: 'pppoe' },
-        { name: 'user3', profile: 'premium-50mbps', service: 'pppoe' }
+        { name: 'user1', profile: 'basic-10mbps', service: 'pppoe', comment: 'Mock data', disabled: false },
+        { name: 'user2', profile: 'standard-25mbps', service: 'pppoe', comment: 'Mock data', disabled: false },
+        { name: 'user3', profile: 'premium-50mbps', service: 'pppoe', comment: 'Mock data', disabled: false }
       ];
       res.json(mockSecrets);
     }
@@ -1485,87 +1678,9 @@ app.get('/api/routers/:id/ppp-secrets', async (req: Request, res: Response) => {
   }
 });
 
-// Create new PPP secret
-app.post('/api/routers/:id/ppp-secrets', async (req: Request, res: Response) => {
-  try {
-    const { username, password, profile } = req.body;
-    
-    if (!username || !password || !profile) {
-      return res.status(400).json({ 
-        success: false,
-        message: 'Username, password, and profile are required' 
-      });
-    }
-    
-    const router = await db.Router.findByPk(req.params.id);
-    if (!router) {
-      return res.status(404).json({ 
-        success: false,
-        message: 'Router not found' 
-      });
-    }
-    
-    try {
-      // Koneksi ke Mikrotik
-      const conn = new RouterOSAPI({
-        host: router.ipAddress,
-        user: router.username,
-        password: router.password,
-        port: router.port || 8728
-      });
-      
-      await conn.connect();
-      
-      // Cek apakah username sudah ada - Fixed syntax
-      const existingSecrets = await conn.write('/ppp/secret/print', [
-        `?name=${username}`
-      ]);
-      
-      if (existingSecrets && existingSecrets.length > 0) {
-        await conn.close();
-        return res.status(409).json({ 
-          success: false,
-          message: 'Username already exists' 
-        });
-      }
-      
-      // Buat PPP secret baru - Fixed syntax
-      const result = await conn.write('/ppp/secret/add', [
-        `=name=${username}`,
-        `=password=${password}`,
-        `=profile=${profile}`,
-        `=service=pppoe`
-      ]);
-      
-      await conn.close();
-      
-      res.json({
-        success: true,
-        message: 'PPP secret created successfully',
-        data: {
-          username,
-          profile,
-          id: result.length > 0 ? result[0]['.id'] : null
-        }
-      });
-      
-    } catch (mikrotikError: any) {
-      console.error('Mikrotik connection error:', mikrotikError);
-      res.status(500).json({ 
-        success: false,
-        message: 'Failed to create PPP secret on MikroTik',
-        error: mikrotikError.message 
-      });
-    }
-  } catch (error: any) {
-    console.error('Error creating PPP secret:', error);
-    res.status(500).json({ 
-      success: false,
-      message: 'Failed to create PPP secret', 
-      error: error.message 
-    });
-  }
-});
+// PPP Secret creation endpoint has been removed due to persistent RouterOS API issues
+// The functionality was causing server crashes and instability
+// Consider implementing a more stable MikroTik integration solution in the future
 
 // Transaction CRUD Endpoints
 
@@ -1602,6 +1717,51 @@ app.post('/api/transactions', async (req: Request, res: Response) => {
     }
     
     const transaction = await db.Transaction.create(transactionData);
+    
+    // Auto-enable PPP secret jika transaksi adalah pembayaran (status: 'paid')
+    if (transaction.status === 'paid' && transaction.customerId) {
+      try {
+        console.log(`💰 Payment completed for customer ${transaction.customerId}, auto-enabling PPP secret...`);
+        
+        // Ambil data customer dengan relasi router
+        const customer = await db.Customer.findByPk(transaction.customerId, {
+          include: [{
+            model: db.Router,
+            as: 'routerData'
+          }]
+        });
+        if (customer && customer.pppSecret && customer.routerData && customer.routerData.name) {
+          // Import mikrotik utility
+          const mikrotikAPI = require('../utils/mikrotik');
+          
+          // Enable PPP Secret di MikroTik
+          const enableResult = await mikrotikAPI.enablePPPSecret(customer.routerData.name, customer.pppSecret);
+          
+          if (enableResult.success) {
+            // Update customer status
+            await customer.update({
+              billingStatus: 'lunas',
+              mikrotikStatus: 'active',
+              serviceStatus: 'active'
+            });
+            
+            console.log(`✅ PPP Secret ${customer.pppSecret} auto-enabled for customer ${customer.name}`);
+            console.log('MikroTik result:', enableResult.message);
+          } else {
+            console.error(`❌ Failed to enable PPP Secret ${customer.pppSecret} for customer ${customer.name}:`, enableResult.message);
+            // Update status sebagai partial success
+            await customer.update({
+              billingStatus: 'lunas',
+              serviceStatus: 'active'
+              // mikrotikStatus tetap seperti sebelumnya karena enable gagal
+            });
+          }
+        }
+      } catch (autoEnableError: any) {
+        console.error('❌ Failed to auto-enable PPP secret:', autoEnableError);
+        // Jangan gagalkan transaksi jika auto-enable gagal
+      }
+    }
     
     // Transform back to frontend format
     const responseTransaction = {
@@ -1677,7 +1837,55 @@ app.put('/api/transactions/:id', async (req: Request, res: Response) => {
       });
     }
     
+    // Simpan status lama untuk perbandingan
+    const oldStatus = transaction.status;
+    
     await transaction.update(updateData);
+    
+    // Auto-enable PPP secret jika status berubah menjadi 'paid'
+    if (oldStatus !== 'paid' && transaction.status === 'paid' && transaction.customerId) {
+      try {
+        console.log(`💰 Payment status updated to 'paid' for customer ${transaction.customerId}, auto-enabling PPP secret...`);
+        
+        // Ambil data customer dengan relasi router
+        const customer = await db.Customer.findByPk(transaction.customerId, {
+          include: [{
+            model: db.Router,
+            as: 'routerData'
+          }]
+        });
+        if (customer && customer.pppSecret && customer.routerData && customer.routerData.name) {
+          // Import mikrotik utility
+          const mikrotikAPI = require('../utils/mikrotik');
+          
+          // Enable PPP Secret di MikroTik
+          const enableResult = await mikrotikAPI.enablePPPSecret(customer.routerData.name, customer.pppSecret);
+          
+          if (enableResult.success) {
+            // Update customer status
+            await customer.update({
+              billingStatus: 'lunas',
+              mikrotikStatus: 'active',
+              serviceStatus: 'active'
+            });
+            
+            console.log(`✅ PPP Secret ${customer.pppSecret} auto-enabled for customer ${customer.name} (transaction update)`);
+            console.log('MikroTik result:', enableResult.message);
+          } else {
+            console.error(`❌ Failed to enable PPP Secret ${customer.pppSecret} for customer ${customer.name}:`, enableResult.message);
+            // Update status sebagai partial success
+            await customer.update({
+              billingStatus: 'lunas',
+              serviceStatus: 'active'
+              // mikrotikStatus tetap seperti sebelumnya karena enable gagal
+            });
+          }
+        }
+      } catch (autoEnableError: any) {
+        console.error('❌ Failed to auto-enable PPP secret on transaction update:', autoEnableError);
+        // Jangan gagalkan update transaksi jika auto-enable gagal
+      }
+    }
     
     const responseTransaction = {
       ...transaction.toJSON(),
@@ -1772,9 +1980,61 @@ app.get('/api/transactions/stats', async (req: Request, res: Response) => {
 
 // Import billing routes (pastikan path benar)
 const billingRoutes = require('../routes/billing');
+const customersRoutes = require('../routes/customers');
 
 // Add billing routes
 app.use('/api/billing', billingRoutes);
+app.use('/api/customers', customersRoutes);
+
+// Import node-cron untuk auto scheduler
+const cron = require('node-cron');
+const axios = require('axios');
+
+// Auto Suspend Scheduler - Jalankan setiap tanggal 6 setiap bulan jam 00:01
+cron.schedule('1 0 6 * *', async () => {
+  try {
+    console.log('🕐 Running auto suspend check at:', getJakartaTime().format('YYYY-MM-DD HH:mm:ss'));
+    
+    // Panggil endpoint suspend-overdue
+    const response = await axios.post('http://localhost:3001/api/billing/suspend-overdue');
+    
+    if (response.data.success) {
+      console.log('✅ Auto suspend completed:', response.data.message);
+    } else {
+      console.log('⚠️ Auto suspend warning:', response.data.message);
+    }
+  } catch (error: any) {
+    console.error('❌ Auto suspend failed:', error?.message || error);
+  }
+}, {
+  timezone: 'Asia/Jakarta'
+});
+
+// Manual trigger untuk testing auto suspend
+app.post('/api/trigger-auto-suspend', async (req: Request, res: Response) => {
+  try {
+    console.log('🔧 Manual auto suspend triggered at:', getJakartaTime().format('YYYY-MM-DD HH:mm:ss'));
+    
+    const response = await axios.post('http://localhost:3001/api/billing/suspend-overdue');
+    
+    res.json({
+      success: true,
+      message: 'Auto suspend triggered manually',
+      result: response.data,
+      timestamp: getJakartaTime().toISOString()
+    });
+  } catch (error: any) {
+    console.error('❌ Manual auto suspend failed:', error.message);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to trigger auto suspend',
+      error: error.message,
+      timestamp: getJakartaTime().toISOString()
+    });
+  }
+});
+
+console.log('🤖 Auto suspend scheduler initialized - will run monthly on 6th at 00:01 Jakarta time');
 
 // Dashboard stats dengan filter bulanan
 app.get('/api/dashboard/stats', async (req: Request, res: Response) => {

@@ -92,6 +92,43 @@ const CustomerForm: React.FC<CustomerFormProps> = ({ customer, onSubmit, onCance
 
 
 
+  // Load customer data when editing
+  useEffect(() => {
+    if (customer) {
+      // Convert router ID to router name for display
+      let routerName = '';
+      if (customer.router) {
+        const router = routers.find(r => r.id === customer.router);
+        routerName = router ? router.name : '';
+      }
+      
+      setFormData({
+        ...customer,
+        router: routerName,
+        activeDate: customer.activeDate ? customer.activeDate.split('T')[0] : formatDateToLocal(new Date()),
+        expireDate: customer.expireDate ? customer.expireDate.split('T')[0] : '',
+        paymentDueDate: customer.paymentDueDate ? customer.paymentDueDate.split('T')[0] : ''
+      });
+    }
+  }, [customer, routers]);
+
+  // Set default dates for new customers
+  useEffect(() => {
+    if (!customer) {
+      const now = new Date();
+      const activeDate = new Date(now.getFullYear(), now.getMonth(), 1); // Tanggal 1 bulan ini
+      const paymentDueDate = new Date(now.getFullYear(), now.getMonth() + 1, 5); // Tanggal 5 bulan depan
+      
+      setFormData(prev => ({
+        ...prev,
+        activeDate: formatDateToLocal(activeDate),
+        paymentDueDate: formatDateToLocal(paymentDueDate),
+        installationStatus: 'installed', // Default terpasang
+        serviceStatus: 'active' // Default aktif
+      }));
+    }
+  }, [customer]);
+
   // Debug ODP data
   useEffect(() => {
     console.log('ODP Debug Info:', {
@@ -165,9 +202,8 @@ const CustomerForm: React.FC<CustomerFormProps> = ({ customer, onSubmit, onCance
     const selectedPackage = packages.find(pkg => pkg.name === packageName);
     if (!selectedPackage) return 'default';
     
-    const download = selectedPackage.downloadSpeed || 0;
-    const upload = selectedPackage.uploadSpeed || 0;
-    return `${download}M-${upload}M`;
+    // Use mikrotikProfile from package if available, otherwise fallback to speed-based profile
+    return selectedPackage.mikrotikProfile || `${selectedPackage.downloadSpeed || 0}M-${selectedPackage.uploadSpeed || 0}M`;
   };
 
   // WhatsApp notification function
@@ -327,32 +363,7 @@ const CustomerForm: React.FC<CustomerFormProps> = ({ customer, onSubmit, onCance
     }
   };
   
-  const createPPPSecret = async (routerId: string, username: string, password: string, profile: string) => {
-    try {
-      const response = await fetch(`http://localhost:3001/api/routers/${routerId}/ppp-secrets`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          username,
-          password,
-          profile
-        })
-      });
-      
-      const result = await response.json();
-      
-      if (!response.ok) {
-        throw new Error(result.message || 'Failed to create PPP secret');
-      }
-      
-      return result;
-    } catch (error: any) {
-      console.error('Error creating PPP secret:', error);
-      throw error;
-    }
-  };
+  // PPP Secret creation function has been removed due to API instability
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -362,41 +373,11 @@ const CustomerForm: React.FC<CustomerFormProps> = ({ customer, onSubmit, onCance
       return;
     }
     
-    if (formData.pppSecretType === 'new') {
-      if (!formData.pppSecret || !formData.pppPassword) {
-        alert('Username dan password PPP Secret wajib diisi untuk secret baru');
-        return;
-      }
-      
-      if (!formData.router) {
-        alert('Router harus dipilih untuk membuat PPP Secret baru');
-        return;
-      }
-      
-      if (!formData.package) {
-        alert('Paket harus dipilih untuk menentukan profile PPP Secret');
-        return;
-      }
-    }
+    // PPP Secret validation removed due to API instability
     
     try {
-      if (formData.pppSecretType === 'new' && formData.router && formData.pppSecret && formData.pppPassword && formData.package) {
-        const profile = getProfileFromPackage(formData.package);
-        
-        const selectedRouter = routers.find(r => r.name === formData.router);
-        if (!selectedRouter) {
-          alert('Router tidak ditemukan');
-          return;
-        }
-        
-        try {
-          await createPPPSecret(selectedRouter.id.toString(), formData.pppSecret, formData.pppPassword, profile);
-          alert('PPP Secret berhasil dibuat di MikroTik');
-        } catch (error: any) {
-          alert(`Gagal membuat PPP Secret: ${error.message}`);
-          return;
-        }
-      }
+      // PPP Secret creation has been removed due to API instability
+      // Customer data will be saved without automatic PPP Secret creation
       
       // Convert router name to router ID
       const submitData = { ...formData };
@@ -635,7 +616,6 @@ const CustomerForm: React.FC<CustomerFormProps> = ({ customer, onSubmit, onCance
                 <SelectContent>
                   <SelectItem value="none">Tidak menggunakan PPP Secret</SelectItem>
                   <SelectItem value="existing">Gunakan PPP Secret yang sudah ada</SelectItem>
-                  <SelectItem value="new">Buat PPP Secret baru</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -672,32 +652,6 @@ const CustomerForm: React.FC<CustomerFormProps> = ({ customer, onSubmit, onCance
                       ))}
                     </div>
                   )}
-                </div>
-              </div>
-            )}
-            
-            {formData.pppSecretType === 'new' && (
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="pppSecret">Username PPP Secret *</Label>
-                  <Input
-                    id="pppSecret"
-                    value={formData.pppSecret || ''}
-                    onChange={(e) => handleChange('pppSecret', e.target.value)}
-                    placeholder="Username untuk PPP Secret"
-                    required
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="pppPassword">Password PPP Secret *</Label>
-                  <Input
-                    id="pppPassword"
-                    type="password"
-                    value={formData.pppPassword || ''}
-                    onChange={(e) => handleChange('pppPassword', e.target.value)}
-                    placeholder="Password untuk PPP Secret"
-                    required
-                  />
                 </div>
               </div>
             )}

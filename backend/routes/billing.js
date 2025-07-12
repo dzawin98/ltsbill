@@ -264,59 +264,520 @@ router.delete('/addons/:id', async (req, res) => {
   }
 });
 
-// Suspend overdue customers
+// Suspend overdue customers - Auto-disable PPP secret pada tanggal 6 untuk pelanggan yang belum bayar dari tanggal 1-5
 router.post('/suspend-overdue', async (req, res) => {
   try {
     const currentDate = getJakartaTime();
     const suspendDate = currentDate.clone().date(6).startOf('day');
     
+    console.log(`🕐 Auto suspend check - Current: ${currentDate.format('YYYY-MM-DD HH:mm:ss')}, Suspend date: ${suspendDate.format('YYYY-MM-DD HH:mm:ss')}`);
+    
     if (currentDate.isSame(suspendDate, 'day')) {
-      // Get customers with overdue bills
+      // Cari pelanggan yang belum bayar dari tanggal 1-5 bulan ini
+      const startOfMonth = currentDate.clone().startOf('month'); // Tanggal 1
+      const endOfGracePeriod = currentDate.clone().date(5).endOf('day'); // Tanggal 5 akhir hari
+      
+      console.log(`📅 Checking unpaid customers from ${startOfMonth.format('YYYY-MM-DD')} to ${endOfGracePeriod.format('YYYY-MM-DD')}`);
+      
+      // Get customers yang belum lunas dan masih aktif
       const overdueCustomers = await Customer.findAll({
         where: {
           billingStatus: 'belum_lunas',
-          serviceStatus: 'active'
-        },
-        include: [{
-          model: Transaction,
-          where: {
-            status: 'pending',
-            dueDate: {
-              [Op.lt]: currentDate.toDate()
-            }
+          serviceStatus: 'active',
+          mikrotikStatus: {
+            [Op.ne]: 'disabled' // Belum di-disable
           }
-        }]
+        }
       });
       
+      console.log(`🔍 Found ${overdueCustomers.length} customers with 'belum_lunas' status`);
+      
       const suspended = [];
+      const skipped = [];
       
       for (const customer of overdueCustomers) {
-        await customer.update({
-          billingStatus: 'suspend',
-          mikrotikStatus: 'disabled',
-          lastSuspendDate: currentDate.toDate()
-        });
-        
-        // Ganti TODO dengan implementasi aktual
-const mikrotikAPI = require('../utils/mikrotik');
-await mikrotikAPI.disablePPPSecret(customer.router, customer.pppSecret);
-        
-        suspended.push(customer);
+        try {
+          // Cek apakah customer punya tagihan pending dalam periode 1-5
+          const unpaidBills = await Transaction.findAll({
+            where: {
+              customerId: customer.id,
+              status: 'pending',
+              createdAt: {
+                [Op.gte]: startOfMonth.toDate(),
+                [Op.lte]: endOfGracePeriod.toDate()
+              }
+            }
+          });
+          
+          if (unpaidBills.length > 0) {
+            console.log(`⚠️ Suspending customer: ${customer.name} (${customer.pppSecret}) - ${unpaidBills.length} unpaid bills`);
+            
+            // Disable PPP Secret di Mikrotik
+            const mikrotikAPI = require('../utils/mikrotik');
+            const disableResult = await mikrotikAPI.disablePPPSecret(customer.router, customer.pppSecret);
+            
+            if (disableResult.success) {
+              await customer.update({
+                billingStatus: 'suspend',
+                mikrotikStatus: 'disabled',
+                lastSuspendDate: currentDate.toDate()
+              });
+              
+              suspended.push({
+                ...customer.toJSON(),
+                unpaidBillsCount: unpaidBills.length,
+                mikrotikResult: disableResult
+              });
+            } else {
+              console.error(`❌ Failed to disable PPP Secret for ${customer.name}:`, disableResult.message);
+              suspended.push({
+                ...customer.toJSON(),
+                unpaidBillsCount: unpaidBills.length,
+                mikrotikResult: disableResult,
+                error: 'MikroTik disable failed'
+              });
+            }
+          } else {
+            console.log(`✅ Skipping customer: ${customer.name} - No unpaid bills in grace period`);
+            skipped.push({
+              id: customer.id,
+              name: customer.name,
+              reason: 'No unpaid bills in grace period (1-5)'
+            });
+          }
+        } catch (mikrotikError) {
+          console.error(`❌ Failed to disable PPP Secret for customer ${customer.id}:`, mikrotikError);
+          suspended.push({
+            ...customer.toJSON(),
+            mikrotikResult: { success: false, error: mikrotikError.message }
+          });
+        }
       }
+      
+      console.log(`📊 Suspension summary: ${suspended.length} suspended, ${skipped.length} skipped`);
       
       res.json({ 
         success: true, 
-        message: `Suspended ${suspended.length} customers`,
-        suspended 
+        message: `Auto-suspend completed: ${suspended.length} customers suspended, ${skipped.length} skipped`,
+        data: {
+          suspended,
+          skipped,
+          suspendDate: suspendDate.format('YYYY-MM-DD HH:mm:ss'),
+          gracePeriod: {
+            from: startOfMonth.format('YYYY-MM-DD'),
+            to: endOfGracePeriod.format('YYYY-MM-DD')
+          }
+        }
       });
     } else {
       res.json({ 
         success: true, 
-        message: 'Not suspension day' 
+        message: `Not suspension day. Current: ${currentDate.format('YYYY-MM-DD')}, Next suspension: ${currentDate.clone().date(6).format('YYYY-MM-DD')}` 
       });
     }
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('❌ Error in suspend-overdue:', error);
+    res.status(500).json({ 
+      success: false,
+      error: error.message,
+      timestamp: getJakartaTime().format('YYYY-MM-DD HH:mm:ss')
+    });
+  }
+});
+
+// Test suspend single customer
+router.post('/test-suspend/:customerId', async (req, res) => {
+  try {
+    const { customerId } = req.params;
+    
+    const customer = await Customer.findByPk(customerId);
+    if (!customer) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Customer not found' 
+      });
+    }
+    
+    console.log(`🧪 Testing suspend for customer: ${customer.name} (${customer.pppSecret})`);
+    
+    try {
+      // Test disable PPP Secret di Mikrotik
+      const mikrotikAPI = require('../utils/mikrotik');
+      const disableResult = await mikrotikAPI.disablePPPSecret(customer.router, customer.pppSecret);
+      
+      if (disableResult.success) {
+        // Update customer status
+        await customer.update({
+          billingStatus: 'suspend',
+          mikrotikStatus: 'disabled',
+          lastSuspendDate: getJakartaTime().toDate()
+        });
+        
+        res.json({
+          success: true,
+          message: `Customer ${customer.name} successfully suspended`,
+          data: {
+            customer: {
+              id: customer.id,
+              name: customer.name,
+              pppSecret: customer.pppSecret,
+              router: customer.router,
+              billingStatus: 'suspend',
+              mikrotikStatus: 'disabled'
+            },
+            mikrotikResult: disableResult,
+            timestamp: getJakartaTime().format('YYYY-MM-DD HH:mm:ss')
+          }
+        });
+      } else {
+        res.status(500).json({
+          success: false,
+          message: `Failed to suspend customer ${customer.name}: ${disableResult.message}`,
+          data: {
+            customer: {
+              id: customer.id,
+              name: customer.name,
+              pppSecret: customer.pppSecret,
+              router: customer.router
+            },
+            mikrotikResult: disableResult,
+            timestamp: getJakartaTime().format('YYYY-MM-DD HH:mm:ss')
+          }
+        });
+      }
+    } catch (mikrotikError) {
+      console.error(`❌ Failed to disable PPP Secret for customer ${customer.id}:`, mikrotikError);
+      
+      res.json({
+        success: false,
+        message: `Failed to suspend customer ${customer.name}`,
+        data: {
+          customer: {
+            id: customer.id,
+            name: customer.name,
+            pppSecret: customer.pppSecret,
+            router: customer.router
+          },
+          mikrotikResult: { 
+            success: false, 
+            error: mikrotikError.message 
+          },
+          timestamp: getJakartaTime().format('YYYY-MM-DD HH:mm:ss')
+        }
+      });
+    }
+  } catch (error) {
+    console.error('Error in test suspend:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Internal server error',
+      error: error.message 
+    });
+  }
+});
+
+// Test enable single customer
+router.post('/test-enable/:customerId', async (req, res) => {
+  try {
+    const { customerId } = req.params;
+    
+    const customer = await Customer.findByPk(customerId);
+    if (!customer) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Customer not found' 
+      });
+    }
+    
+    console.log(`🧪 Testing enable for customer: ${customer.name} (${customer.pppSecret})`);
+    
+    try {
+      // Test enable PPP Secret di Mikrotik
+      const mikrotikAPI = require('../utils/mikrotik');
+      const enableResult = await mikrotikAPI.enablePPPSecret(customer.router, customer.pppSecret);
+      
+      if (enableResult.success) {
+        // Update customer status
+        await customer.update({
+          billingStatus: 'lunas',
+          mikrotikStatus: 'enabled',
+          serviceStatus: 'active'
+        });
+        
+        res.json({
+          success: true,
+          message: `Customer ${customer.name} successfully enabled`,
+          data: {
+            customer: {
+              id: customer.id,
+              name: customer.name,
+              pppSecret: customer.pppSecret,
+              router: customer.router,
+              billingStatus: 'lunas',
+              mikrotikStatus: 'enabled',
+              serviceStatus: 'active'
+            },
+            mikrotikResult: enableResult,
+            timestamp: getJakartaTime().format('YYYY-MM-DD HH:mm:ss')
+          }
+        });
+      } else {
+        res.status(500).json({
+          success: false,
+          message: `Failed to enable customer ${customer.name}: ${enableResult.message}`,
+          data: {
+            customer: {
+              id: customer.id,
+              name: customer.name,
+              pppSecret: customer.pppSecret,
+              router: customer.router
+            },
+            mikrotikResult: enableResult,
+            timestamp: getJakartaTime().format('YYYY-MM-DD HH:mm:ss')
+          }
+        });
+      }
+    } catch (mikrotikError) {
+      console.error(`❌ Failed to enable PPP Secret for customer ${customer.id}:`, mikrotikError);
+      
+      res.json({
+        success: false,
+        message: `Failed to enable customer ${customer.name}`,
+        data: {
+          customer: {
+            id: customer.id,
+            name: customer.name,
+            pppSecret: customer.pppSecret,
+            router: customer.router
+          },
+          mikrotikResult: { 
+            success: false, 
+            error: mikrotikError.message 
+          },
+          timestamp: getJakartaTime().format('YYYY-MM-DD HH:mm:ss')
+        }
+      });
+    }
+  } catch (error) {
+    console.error('Error in test enable:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Internal server error',
+      error: error.message 
+    });
+  }
+});
+
+// Test suspend customer by name
+router.post('/test-suspend-by-name', async (req, res) => {
+  try {
+    const { customerName } = req.body;
+    
+    if (!customerName || !customerName.trim()) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Customer name is required' 
+      });
+    }
+    
+    // Search customer by name (case insensitive, partial match)
+    const customer = await Customer.findOne({
+      where: {
+        name: {
+          [Op.like]: `%${customerName.trim()}%`
+        }
+      }
+    });
+    
+    if (!customer) {
+      return res.status(404).json({ 
+        success: false, 
+        message: `Customer dengan nama '${customerName}' tidak ditemukan` 
+      });
+    }
+    
+    console.log(`🧪 Testing suspend by name for customer: ${customer.name} (${customer.pppSecret})`);
+    
+    try {
+      // Test disable PPP Secret di Mikrotik
+      const mikrotikAPI = require('../utils/mikrotik');
+      const disableResult = await mikrotikAPI.disablePPPSecret(customer.router, customer.pppSecret);
+      
+      if (disableResult.success) {
+        // Update customer status
+        await customer.update({
+          billingStatus: 'suspend',
+          mikrotikStatus: 'disabled',
+          lastSuspendDate: getJakartaTime().toDate()
+        });
+        
+        res.json({
+          success: true,
+          message: `Customer ${customer.name} berhasil di-suspend`,
+          data: {
+            customer: {
+              id: customer.id,
+              name: customer.name,
+              pppSecret: customer.pppSecret,
+              router: customer.router,
+              billingStatus: 'suspend',
+              mikrotikStatus: 'disabled'
+            },
+            mikrotikResult: disableResult,
+            timestamp: getJakartaTime().format('YYYY-MM-DD HH:mm:ss')
+          }
+        });
+      } else {
+        res.status(500).json({
+          success: false,
+          message: `Gagal suspend customer ${customer.name}: ${disableResult.message}`,
+          data: {
+            customer: {
+              id: customer.id,
+              name: customer.name,
+              pppSecret: customer.pppSecret,
+              router: customer.router
+            },
+            mikrotikResult: disableResult,
+            timestamp: getJakartaTime().format('YYYY-MM-DD HH:mm:ss')
+          }
+        });
+      }
+    } catch (mikrotikError) {
+      console.error(`❌ Failed to disable PPP Secret for customer ${customer.id}:`, mikrotikError);
+      
+      res.json({
+        success: false,
+        message: `Gagal suspend customer ${customer.name}`,
+        data: {
+          customer: {
+            id: customer.id,
+            name: customer.name,
+            pppSecret: customer.pppSecret,
+            router: customer.router
+          },
+          mikrotikResult: { 
+            success: false, 
+            error: mikrotikError.message 
+          },
+          timestamp: getJakartaTime().format('YYYY-MM-DD HH:mm:ss')
+        }
+      });
+    }
+  } catch (error) {
+    console.error('Error in test suspend by name:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Internal server error',
+      error: error.message 
+    });
+  }
+});
+
+// Test enable customer by name
+router.post('/test-enable-by-name', async (req, res) => {
+  try {
+    const { customerName } = req.body;
+    
+    if (!customerName || !customerName.trim()) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Customer name is required' 
+      });
+    }
+    
+    // Search customer by name (case insensitive, partial match)
+    const customer = await Customer.findOne({
+      where: {
+        name: {
+          [Op.like]: `%${customerName.trim()}%`
+        }
+      }
+    });
+    
+    if (!customer) {
+      return res.status(404).json({ 
+        success: false, 
+        message: `Customer dengan nama '${customerName}' tidak ditemukan` 
+      });
+    }
+    
+    console.log(`🧪 Testing enable by name for customer: ${customer.name} (${customer.pppSecret})`);
+    
+    try {
+      // Test enable PPP Secret di Mikrotik
+      const mikrotikAPI = require('../utils/mikrotik');
+      const enableResult = await mikrotikAPI.enablePPPSecret(customer.router, customer.pppSecret);
+      
+      if (enableResult.success) {
+        // Update customer status
+        await customer.update({
+          billingStatus: 'lunas',
+          mikrotikStatus: 'enabled',
+          serviceStatus: 'active'
+        });
+        
+        res.json({
+          success: true,
+          message: `Customer ${customer.name} berhasil di-enable`,
+          data: {
+            customer: {
+              id: customer.id,
+              name: customer.name,
+              pppSecret: customer.pppSecret,
+              router: customer.router,
+              billingStatus: 'lunas',
+              mikrotikStatus: 'enabled',
+              serviceStatus: 'active'
+            },
+            mikrotikResult: enableResult,
+            timestamp: getJakartaTime().format('YYYY-MM-DD HH:mm:ss')
+          }
+        });
+      } else {
+        res.status(500).json({
+          success: false,
+          message: `Gagal enable customer ${customer.name}: ${enableResult.message}`,
+          data: {
+            customer: {
+              id: customer.id,
+              name: customer.name,
+              pppSecret: customer.pppSecret,
+              router: customer.router
+            },
+            mikrotikResult: enableResult,
+            timestamp: getJakartaTime().format('YYYY-MM-DD HH:mm:ss')
+          }
+        });
+      }
+    } catch (mikrotikError) {
+      console.error(`❌ Failed to enable PPP Secret for customer ${customer.id}:`, mikrotikError);
+      
+      res.json({
+        success: false,
+        message: `Gagal enable customer ${customer.name}`,
+        data: {
+          customer: {
+            id: customer.id,
+            name: customer.name,
+            pppSecret: customer.pppSecret,
+            router: customer.router
+          },
+          mikrotikResult: { 
+            success: false, 
+            error: mikrotikError.message 
+          },
+          timestamp: getJakartaTime().format('YYYY-MM-DD HH:mm:ss')
+        }
+      });
+    }
+  } catch (error) {
+    console.error('Error in test enable by name:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Internal server error',
+      error: error.message 
+    });
   }
 });
 

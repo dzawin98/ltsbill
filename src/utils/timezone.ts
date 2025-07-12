@@ -1,9 +1,9 @@
 // Utility functions untuk timezone Jakarta
 export const getJakartaDate = (date?: Date): Date => {
   const now = date || new Date();
-  // Konversi ke timezone Jakarta (UTC+7)
-  const jakartaTime = new Date(now.getTime() + (7 * 60 * 60 * 1000));
-  return jakartaTime;
+  // Gunakan Intl.DateTimeFormat untuk mendapatkan waktu Jakarta yang akurat
+  const jakartaTimeString = now.toLocaleString('sv-SE', { timeZone: 'Asia/Jakarta' });
+  return new Date(jakartaTimeString);
 };
 
 export const formatDateForInput = (date: Date): string => {
@@ -27,5 +27,8 @@ export const formatDateTimeForDisplay = (date: Date | string): string => {
 };
 
 export const getCurrentJakartaTime = (): Date => {
-  return getJakartaDate();
+  // Langsung gunakan waktu server/sistem dengan timezone Jakarta
+  const now = new Date();
+  const jakartaTimeString = now.toLocaleString('sv-SE', { timeZone: 'Asia/Jakarta' });
+  return new Date(jakartaTimeString);
 };

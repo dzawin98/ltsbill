@@ -117,6 +117,14 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.STRING,
       allowNull: true
     },
+    routerId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'routers',
+        key: 'id'
+      }
+    },
     notes: {
       type: DataTypes.TEXT,
       allowNull: true

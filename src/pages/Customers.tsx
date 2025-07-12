@@ -8,14 +8,16 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Plus, Search, Edit, Trash2, Loader2, Settings } from 'lucide-react';
+import { Plus, Search, Edit, Trash2, Loader2, Settings, Power, PowerOff, RefreshCw } from 'lucide-react';
 import { Customer } from '@/types/isp';
 import CustomerForm from '@/components/CustomerForm';
+import PPPUserControl from '@/components/PPPUserControl';
 import { useCustomers } from '@/hooks/useCustomers';
 import { useAreas } from '@/hooks/useAreas';
 import { useRouters } from '@/hooks/useRouters';
 import { useODP } from '@/hooks/useODP';
 import { usePackages } from '@/hooks/usePackages';
+import { disablePPPUser, enablePPPUser, checkPPPUserStatus } from '@/utils/api';
 import { toast } from 'sonner';
 
 interface WhatsAppSettings {
@@ -586,12 +588,14 @@ Terima kasih telah bergabung dengan LATANSA NETWORKS!`,
                   <TableHead>Tanggal Aktif</TableHead>
                   <TableHead>Tanggal Berakhir</TableHead>
                   <TableHead>Periode</TableHead>
+                  <TableHead>Nama User PPP</TableHead>
+                  <TableHead className="w-32">PPP Control</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {paginatedCustomers.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={12} className="text-center py-8 text-gray-500">
+                    <TableCell colSpan={14} className="text-center py-8 text-gray-500">
                       Tidak ada pelanggan yang ditemukan
                     </TableCell>
                   </TableRow>
@@ -661,6 +665,10 @@ Terima kasih telah bergabung dengan LATANSA NETWORKS!`,
                           }
                         </TableCell>
                         <TableCell>{customer.billingType || '-'}</TableCell>
+                        <TableCell className="font-mono">{customer.pppSecret || '-'}</TableCell>
+                        <TableCell>
+                          <PPPUserControl customerId={customer.id} />
+                        </TableCell>
                       </TableRow>
                     );
                   })
@@ -780,7 +788,8 @@ Terima kasih telah bergabung dengan LATANSA NETWORKS!`,
               <span className="font-semibold text-green-600">
                 {(() => {
                   const grandTotal = filteredCustomers.reduce((total, customer) => {
-                    return total + (customer.packagePrice || 0);
+                    const price = customer.packagePrice || 0;
+                    return total + price;
                   }, 0);
                   return new Intl.NumberFormat('id-ID', {
                     style: 'currency',
@@ -798,7 +807,8 @@ Terima kasih telah bergabung dengan LATANSA NETWORKS!`,
                   const totalTagihan = filteredCustomers.reduce((total, customer) => {
                     const status = getCustomerStatus(customer);
                     if (status === 'BELUM BAYAR' || status === 'SUSPENDED') {
-                      return total + (customer.packagePrice || 0);
+                      const price = customer.packagePrice || 0;
+                      return total + price;
                     }
                     return total;
                   }, 0);

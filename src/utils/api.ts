@@ -332,28 +332,7 @@ export const deleteTransaction = async (id: string): Promise<ApiResponse<void>> 
 };
 
 // MikroTik API functions
-export const getPPPProfiles = async (routerId: string): Promise<ApiResponse<MikrotikProfile[]>> => {
-  try {
-    const response = await apiClient.get(`/routers/${routerId}/ppp-profiles`);
-    return {
-      success: true,
-      data: response.data,
-      message: 'PPP Profiles retrieved successfully'
-    };
-  } catch (error) {
-    console.error('Error fetching PPP profiles:', error);
-    return {
-      success: true,
-      data: [
-        { name: 'basic-10mbps', rateLimit: '10M/5M' },
-        { name: 'standard-25mbps', rateLimit: '25M/10M' },
-        { name: 'premium-50mbps', rateLimit: '50M/20M' }
-      ],
-      message: 'Using dummy data - backend not available'
-    };
-  }
-};
-
+// Get PPP Secrets from router
 export const getPPPSecrets = async (routerId: string): Promise<ApiResponse<PPPSecret[]>> => {
   try {
     const response = await apiClient.get(`/routers/${routerId}/ppp-secrets`);
@@ -369,6 +348,118 @@ export const getPPPSecrets = async (routerId: string): Promise<ApiResponse<PPPSe
       data: [],
       message: 'Using dummy data - backend not available'
     };
+  }
+};
+
+// Billing API functions
+// Trigger auto suspend manually
+export const triggerAutoSuspend = async (): Promise<ApiResponse<any>> => {
+  try {
+    const response = await apiClient.post('/trigger-auto-suspend');
+    return response.data;
+  } catch (error) {
+    console.error('Error triggering auto suspend:', error);
+    throw error;
+  }
+};
+
+// Generate monthly bills
+export const generateMonthlyBills = async (): Promise<ApiResponse<any>> => {
+  try {
+    const response = await apiClient.post('/billing/generate-monthly-bills');
+    return response.data;
+  } catch (error) {
+    console.error('Error generating monthly bills:', error);
+    throw error;
+  }
+};
+
+// Suspend overdue customers
+export const suspendOverdueCustomers = async (): Promise<ApiResponse<any>> => {
+  try {
+    const response = await apiClient.post('/billing/suspend-overdue');
+    return response.data;
+  } catch (error) {
+    console.error('Error suspending overdue customers:', error);
+    throw error;
+  }
+};
+
+// Test suspend individual customer
+export const testSuspendCustomer = async (customerId: string): Promise<ApiResponse<any>> => {
+  try {
+    const response = await apiClient.post(`/billing/test-suspend/${customerId}`);
+    return response.data;
+  } catch (error) {
+    console.error('Error testing suspend customer:', error);
+    throw error;
+  }
+};
+
+// Test enable individual customer
+export const testEnableCustomer = async (customerId: string): Promise<ApiResponse<any>> => {
+  try {
+    const response = await apiClient.post(`/billing/test-enable/${customerId}`);
+    return response.data;
+  } catch (error) {
+    console.error('Error testing enable customer:', error);
+    throw error;
+  }
+};
+
+// Test suspend customer by name
+export const testSuspendCustomerByName = async (customerName: string): Promise<ApiResponse<any>> => {
+  try {
+    const response = await apiClient.post('/billing/test-suspend-by-name', { customerName });
+    return response.data;
+  } catch (error) {
+    console.error('Error testing suspend customer by name:', error);
+    throw error;
+  }
+};
+
+// Test enable customer by name
+export const testEnableCustomerByName = async (customerName: string): Promise<ApiResponse<any>> => {
+  try {
+    const response = await apiClient.post('/billing/test-enable-by-name', { customerName });
+    return response.data;
+  } catch (error) {
+    console.error('Error testing enable customer by name:', error);
+    throw error;
+  }
+};
+
+// PPP User Management API functions
+// Disable PPP user
+export const disablePPPUser = async (customerId: string): Promise<ApiResponse<any>> => {
+  try {
+    const response = await apiClient.post(`/customers/${customerId}/disable-ppp`);
+    return response.data;
+  } catch (error) {
+    console.error('Error disabling PPP user:', error);
+    throw error;
+  }
+};
+
+// Enable PPP user
+export const enablePPPUser = async (customerId: string): Promise<ApiResponse<any>> => {
+  try {
+    const response = await apiClient.post(`/customers/${customerId}/enable-ppp`);
+    return response.data;
+  } catch (error) {
+    console.error('Error enabling PPP user:', error);
+    throw error;
+  }
+};
+
+// Check PPP user status
+export const checkPPPUserStatus = async (customerId: string): Promise<ApiResponse<any>> => {
+  try {
+    const response = await apiClient.post(`/customers/${customerId}/check-ppp-status`);
+    return response.data;
+  } catch (error) {
+    console.error('Error checking PPP user status:', error);
+    throw error;
   }
 };
 
@@ -434,9 +525,16 @@ export const api = {
   deleteTransaction,
   
   // MikroTik
-  getPPPProfiles,
-  getRouterPPPProfiles: getPPPProfiles, // Add this alias
   getPPPSecrets,
+  
+  // Billing
+  triggerAutoSuspend,
+  generateMonthlyBills,
+  suspendOverdueCustomers,
+  testSuspendCustomer,
+  testEnableCustomer,
+  testSuspendCustomerByName,
+  testEnableCustomerByName,
   
   // Dashboard
   getDashboardStats

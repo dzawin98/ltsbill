@@ -1,7 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { 
   Users, 
@@ -17,13 +16,12 @@ import {
   Clock,
   CheckCircle,
   XCircle,
-  Activity,
   Calendar,
-  Target,
   Zap,
   Signal,
   Globe
 } from 'lucide-react';
+
 import { useCustomers } from '@/hooks/useCustomers';
 import { useAreas } from '@/hooks/useAreas';
 import { useRouters } from '@/hooks/useRouters';
@@ -92,17 +90,19 @@ const Dashboard = () => {
     return transactionDate.getMonth() === currentMonth && transactionDate.getFullYear() === currentYear;
   });
   
-  const monthlyRevenue = monthlyTransactions.reduce((sum, t) => sum + (t.amount || 0), 0);
-  const totalRevenue = transactions.reduce((sum, t) => sum + (t.amount || 0), 0);
+  const monthlyRevenue = monthlyTransactions.reduce((sum, t) => {
+    // Convert string amount to number (backend returns DECIMAL as string)
+    const amount = typeof t.amount === 'string' ? parseFloat(t.amount) : 
+                   typeof t.amount === 'number' ? t.amount : 0;
+    return sum + (isNaN(amount) ? 0 : amount);
+  }, 0);
   
-  // ARPU (Average Revenue Per User)
-  const arpu = activeCustomers > 0 ? Math.round(monthlyRevenue / activeCustomers) : 0;
-
-  // Network metrics (simulated - in real ISP these would come from network monitoring)
-  const networkUptime = 99.8;
-  const avgBandwidthUsage = 75;
-  const totalBandwidth = 1000; // Mbps
-  const usedBandwidth = Math.round(totalBandwidth * (avgBandwidthUsage / 100));
+  const totalRevenue = transactions.reduce((sum, t) => {
+    // Convert string amount to number (backend returns DECIMAL as string)
+    const amount = typeof t.amount === 'string' ? parseFloat(t.amount) : 
+                   typeof t.amount === 'number' ? t.amount : 0;
+    return sum + (isNaN(amount) ? 0 : amount);
+  }, 0);
 
   // Package distribution
   const packageStats = packages.map(pkg => ({
@@ -157,14 +157,14 @@ const Dashboard = () => {
   ];
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
       {/* Header */}
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center space-y-2 sm:space-y-0">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Dashboard ISP</h1>
           <p className="text-gray-600">Latansa Networks - Monitoring & Analytics</p>
         </div>
-        <div className="text-right">
+        <div className="text-left sm:text-right">
           <div className="text-sm text-gray-500">
             {currentTime.toLocaleDateString('id-ID', { 
               weekday: 'long', 
@@ -183,7 +183,7 @@ const Dashboard = () => {
       </div>
 
       {/* Key Metrics */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Total Customers */}
         <Card className="border-l-4 border-l-blue-500">
           <CardContent className="p-4">
@@ -234,62 +234,29 @@ const Dashboard = () => {
           </CardContent>
         </Card>
 
-        {/* ARPU */}
-        <Card className="border-l-4 border-l-orange-500">
+        {/* Total Revenue */}
+        <Card className="border-l-4 border-l-emerald-500">
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <div className="text-2xl font-bold text-orange-600">
-                  {arpu.toLocaleString('id-ID')}
+                <div className="text-2xl font-bold text-emerald-600">
+                  Rp. {Math.round(totalRevenue).toLocaleString('id-ID')}
                 </div>
-                <div className="text-sm text-gray-500">ARPU (per bulan)</div>
-                <div className="text-xs text-gray-600">Average Revenue Per User</div>
+                <div className="text-sm text-gray-500">Total Pendapatan Selama ini</div>
+                <div className="text-xs text-gray-600">{transactions.length} total transaksi</div>
               </div>
-              <div className="h-12 w-12 bg-orange-100 rounded-full flex items-center justify-center">
-                <Target className="h-6 w-6 text-orange-600" />
+              <div className="h-12 w-12 bg-emerald-100 rounded-full flex items-center justify-center">
+                <DollarSign className="h-6 w-6 text-emerald-600" />
               </div>
             </div>
           </CardContent>
         </Card>
+
+
       </div>
 
-      {/* Network & Infrastructure */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Network Status */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center space-x-2">
-              <Activity className="h-5 w-5" />
-              <span>Status Jaringan</span>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-medium">Network Uptime</span>
-              <Badge variant="secondary" className="bg-green-100 text-green-800">
-                {networkUptime}%
-              </Badge>
-            </div>
-            <Progress value={networkUptime} className="h-2" />
-            
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-medium">Bandwidth Usage</span>
-              <span className="text-sm text-gray-600">{usedBandwidth}/{totalBandwidth} Mbps</span>
-            </div>
-            <Progress value={avgBandwidthUsage} className="h-2" />
-            
-            <div className="grid grid-cols-2 gap-4 pt-2">
-              <div className="text-center">
-                <div className="text-lg font-semibold text-blue-600">{routers.length}</div>
-                <div className="text-xs text-gray-500">Total Router</div>
-              </div>
-              <div className="text-center">
-                <div className="text-lg font-semibold text-green-600">{areas.length}</div>
-                <div className="text-xs text-gray-500">Area Coverage</div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+      {/* Analytics */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
 
         {/* Customer Analytics */}
         <Card>
@@ -376,10 +343,7 @@ const Dashboard = () => {
                 <span className="font-semibold text-purple-600">{Math.round(monthlyRevenue).toLocaleString('id-ID')}</span>
               </div>
               
-              <div className="flex justify-between items-center">
-                <span className="text-sm text-gray-600">ARPU</span>
-                <span className="font-semibold text-orange-600">{arpu.toLocaleString('id-ID')}</span>
-              </div>
+
               
               <div className="flex justify-between items-center">
                 <span className="text-sm text-gray-600">Transaksi Bulan Ini</span>
@@ -396,7 +360,7 @@ const Dashboard = () => {
       </div>
 
       {/* Package Distribution */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center space-x-2">
@@ -469,7 +433,7 @@ const Dashboard = () => {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-4 gap-4">
             {alerts.map((alert, index) => (
               <div key={index} className={`p-4 rounded-lg border ${alert.color}`}>
                 <div className="flex items-center justify-between">
@@ -484,6 +448,8 @@ const Dashboard = () => {
           </div>
         </CardContent>
       </Card>
+
+
     </div>
   );
 };

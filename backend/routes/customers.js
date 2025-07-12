@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { Customer, ODP, Router, Area, Package } = require('../models');
 const { sequelize } = require('../models');
+const mikrotikAPI = require('../utils/mikrotik');
 
 // GET all customers
 router.get('/', async (req, res) => {
@@ -230,6 +231,236 @@ router.delete('/:id', async (req, res) => {
     await transaction.rollback();
     console.error('Error deleting customer:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+// POST disable PPP user
+router.post('/:id/disable-ppp', async (req, res) => {
+  try {
+    const customerId = req.params.id;
+    
+    // Ambil data customer dengan router info
+    const customer = await Customer.findByPk(customerId, {
+      include: [
+        {
+          model: Router,
+          as: 'routerData',
+          attributes: ['id', 'name', 'ipAddress', 'username', 'password', 'port']
+        }
+      ]
+    });
+    
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Customer tidak ditemukan'
+      });
+    }
+    
+    if (!customer.pppSecret) {
+      return res.status(400).json({
+        success: false,
+        message: 'Customer tidak memiliki PPP Secret'
+      });
+    }
+    
+    if (!customer.routerData || !customer.routerData.name) {
+      return res.status(400).json({
+        success: false,
+        message: 'Customer tidak memiliki router yang terkonfigurasi'
+      });
+    }
+
+    // Disable PPP Secret di MikroTik
+    const result = await mikrotikAPI.disablePPPSecret(customer.routerData.name, customer.pppSecret);
+    
+    if (result.success) {
+      // Update status di database
+      await customer.update({
+        mikrotikStatus: 'disabled',
+        lastSuspendDate: new Date()
+      });
+      
+      res.json({
+        success: true,
+        message: `PPP Secret ${customer.pppSecret} berhasil dinonaktifkan`,
+        data: {
+          customerId: customer.id,
+          customerName: customer.name,
+          pppSecret: customer.pppSecret,
+          routerName: customer.routerData.name,
+          status: 'disabled',
+          mikrotikMessage: result.message
+        }
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: `Gagal menonaktifkan PPP Secret ${customer.pppSecret}: ${result.message}`,
+        error: result.error || 'MikroTik API error'
+      });
+    }
+    
+  } catch (error) {
+    console.error('Error disabling PPP user:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+});
+
+// POST enable PPP user
+router.post('/:id/enable-ppp', async (req, res) => {
+  try {
+    const customerId = req.params.id;
+    
+    // Ambil data customer dengan router info
+    const customer = await Customer.findByPk(customerId, {
+      include: [
+        {
+          model: Router,
+          as: 'routerData',
+          attributes: ['id', 'name', 'ipAddress', 'username', 'password', 'port']
+        }
+      ]
+    });
+    
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Customer tidak ditemukan'
+      });
+    }
+    
+    if (!customer.pppSecret) {
+      return res.status(400).json({
+        success: false,
+        message: 'Customer tidak memiliki PPP Secret'
+      });
+    }
+    
+    if (!customer.routerData || !customer.routerData.name) {
+      return res.status(400).json({
+        success: false,
+        message: 'Customer tidak memiliki router yang terkonfigurasi'
+      });
+    }
+
+    // Enable PPP Secret di MikroTik
+    const result = await mikrotikAPI.enablePPPSecret(customer.routerData.name, customer.pppSecret);
+    
+    if (result.success) {
+      // Update status di database
+      await customer.update({
+        mikrotikStatus: 'active'
+      });
+      
+      res.json({
+        success: true,
+        message: `PPP Secret ${customer.pppSecret} berhasil diaktifkan`,
+        data: {
+          customerId: customer.id,
+          customerName: customer.name,
+          pppSecret: customer.pppSecret,
+          routerName: customer.routerData.name,
+          status: 'active',
+          mikrotikMessage: result.message
+        }
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: `Gagal mengaktifkan PPP Secret ${customer.pppSecret}: ${result.message}`,
+        error: result.error || 'MikroTik API error'
+      });
+    }
+    
+  } catch (error) {
+    console.error('Error enabling PPP user:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+});
+
+// POST check PPP status
+router.post('/:id/check-ppp-status', async (req, res) => {
+  try {
+    const customerId = req.params.id;
+    
+    // Ambil data customer dengan router info
+    const customer = await Customer.findByPk(customerId, {
+      include: [
+        {
+          model: Router,
+          as: 'routerData',
+          attributes: ['id', 'name', 'ipAddress', 'username', 'password', 'port']
+        }
+      ]
+    });
+    
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Customer tidak ditemukan'
+      });
+    }
+    
+    if (!customer.pppSecret) {
+      return res.status(400).json({
+        success: false,
+        message: 'Customer tidak memiliki PPP Secret'
+      });
+    }
+    
+    if (!customer.routerData || !customer.routerData.name) {
+      return res.status(400).json({
+        success: false,
+        message: 'Customer tidak memiliki router yang terkonfigurasi'
+      });
+    }
+    
+    // Cek status PPP Secret di MikroTik
+    const status = await mikrotikAPI.checkPPPSecretStatus(customer.routerData.name, customer.pppSecret);
+    
+    if (status.success) {
+      res.json({
+        success: true,
+        message: 'Status PPP Secret berhasil diperiksa',
+        data: {
+          customerId: customer.id,
+          customerName: customer.name,
+          pppSecret: customer.pppSecret,
+          routerName: customer.routerData.name,
+          mikrotikStatus: {
+            found: status.found,
+            disabled: status.disabled,
+            profile: status.profile,
+            service: status.service
+          },
+          databaseStatus: customer.mikrotikStatus,
+          mikrotikMessage: status.message
+        }
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: `Gagal memeriksa status PPP Secret: ${status.message}`,
+        error: status.error || 'MikroTik API error'
+      });
+    }
+    
+  } catch (error) {
+    console.error('Error checking PPP status:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
   }
 });
 

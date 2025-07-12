@@ -48,7 +48,7 @@ export interface Customer {
   addonPrice?: number;
   discount?: number;
   pppSecret?: string;
-  pppSecretType: 'existing' | 'new' | 'none';
+  pppSecretType: 'existing' | 'none';
   odpSlot?: string;
   odpId?: string; // Field untuk relasi dengan ODP
   odpData?: ODP; // Data ODP yang terkait
@@ -77,7 +77,7 @@ export interface Customer {
   proRataAmount?: number;
   createdAt: string;
   updatedAt: string;
-  pppPassword?: string;
+  // pppPassword field removed due to API instability
 }
 
 export interface Package {
@@ -271,7 +271,7 @@ export interface CustomerFormData {
   addonPrice?: number;
   discount?: number;
   pppSecret?: string;
-  pppSecretType: 'none' | 'existing' | 'new';
+  pppSecretType: 'none' | 'existing';
   router?: string;
   odpSlot?: string;
   billingType: 'prepaid' | 'postpaid';

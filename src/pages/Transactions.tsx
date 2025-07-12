@@ -73,9 +73,9 @@ const Transactions = () => {
   // Helper function untuk mendapatkan tanggal dalam timezone Jakarta
   const getJakartaDate = (date?: Date) => {
     const now = date || new Date();
-    // Konversi ke timezone Jakarta (UTC+7)
-    const jakartaTime = new Date(now.getTime() + (7 * 60 * 60 * 1000));
-    return jakartaTime;
+    // Gunakan Intl.DateTimeFormat untuk mendapatkan waktu Jakarta yang akurat
+    const jakartaTimeString = now.toLocaleString('sv-SE', { timeZone: 'Asia/Jakarta' });
+    return new Date(jakartaTimeString);
   };
 
   const formatDateForInput = (date: Date) => {
